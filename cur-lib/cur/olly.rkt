@@ -43,57 +43,73 @@
   (define (cur->coq syn)
     (parameterize ([coq-defns ""])
       (define output
-        (let cur->coq ([syn syn])
-          (syntax-parse (cur-expand syn #'define #'begin)
+        (let cur->coq ([syn syn]
+                       [local-env (make-immutable-hash)])
+          (syntax-parse (cur-expand #:local-env local-env syn #'define #'begin)
             ;; TODO: Need to add these to a literal set and export it
             ;; Or, maybe overwrite syntax-parse
             #:literals (real-lambda real-forall data real-app real-elim define begin Type)
             [(begin e ...)
              (for/fold ([str ""])
                        ([e (syntax->list #'(e ...))])
-               (format "~a~n" (cur->coq e)))]
+               (format "~a~n" (cur->coq e local-env)))]
             [(define name:id body)
              (begin
                (coq-lift-top-level
                 (format "Definition ~a := ~a.~n"
-                        (cur->coq #'name)
-                        (cur->coq #'body)))
+                        (cur->coq #'name local-env)
+                        (cur->coq #'body local-env)))
                "")]
             [(define (name:id (x:id : t) ...) body)
              (begin
+               (define-values (args body-local-env)
+                 (for/fold ([str ""]
+                            [local-env local-env])
+                           ([n (syntax->list #'(x ...))]
+                            [t (syntax->list #'(t ...))])
+                   (values
+                    (format
+                     "~a(~a : ~a) "
+                     str
+                     (cur->coq n local-env)
+                     (cur->coq t local-env))
+                    (dict-set local-env n t))))
                (coq-lift-top-level
                 (format "Function ~a ~a := ~a.~n"
-                        (cur->coq #'name)
-                        (for/fold ([str ""])
-                                  ([n (syntax->list #'(x ...))]
-                                   [t (syntax->list #'(t ...))])
-                          (format "~a(~a : ~a) " str (cur->coq n) (cur->coq t)))
-                        (cur->coq #'body)))
+                        (cur->coq #'name local-env)
+                        args
+                        (cur->coq #'body body-local-env)))
                "")]
             [(real-lambda ~! (x:id (~datum :) t) body:expr)
-             (format "(fun ~a : ~a => ~a)" (cur->coq #'x) (cur->coq #'t)
-                     (cur->coq #'body))]
+             (format "(fun ~a : ~a => ~a)" (syntax-e #'x) (cur->coq #'t local-env)
+                     (cur->coq #'body (dict-set local-env #'x #'t)))]
             [(real-forall ~! (x:id (~datum :) t) body:expr)
-             (format "(forall ~a : ~a, ~a)" (syntax-e #'x) (cur->coq #'t)
-                     (cur->coq #'body))]
+             (format "(forall ~a : ~a, ~a)" (syntax-e #'x) (cur->coq #'t local-env)
+                     (cur->coq #'body (dict-set local-env #'x #'t)))]
             [(data ~! n:id (~datum :) t (x*:id (~datum :) t*) ...)
              (begin
                (coq-lift-top-level
                 (format "Inductive ~a : ~a :=~a."
                         (sanitize-id (format "~a" (syntax-e #'n)))
-                        (cur->coq #'t)
-                        (for/fold ([strs ""])
-                                  ([clause (syntax->list #'((x* : t*) ...))])
-                          (syntax-parse clause
-                            [(x (~datum :) t)
-                             (format "~a~n| ~a : ~a" strs (syntax-e #'x)
-                                     (cur->coq #'t))]))))
+                        (cur->coq #'t local-env)
+                        (call-with-values
+                         (thunk
+                          (for/fold ([strs ""]
+                                     [local-env (dict-set local-env #'n #'t)])
+                                    ([clause (syntax->list #'((x* : t*) ...))])
+                            (syntax-parse clause
+                               [(x (~datum :) t)
+                                (values
+                                 (format "~a~n| ~a : ~a" strs (syntax-e #'x)
+                                         (cur->coq #'t local-env))
+                                 (dict-set local-env #'x #'t))])))
+                         (lambda (x y) x))))
                "")]
             [(Type i) "Type"]
             [(real-elim var t)
-             (format "~a_rect" (cur->coq #'var))]
+             (format "~a_rect" (cur->coq #'var local-env))]
             [(real-app e1 e2)
-             (format "(~a ~a)" (cur->coq #'e1) (cur->coq #'e2))]
+             (format "(~a ~a)" (cur->coq #'e1 local-env) (cur->coq #'e2 local-env))]
             [e:id (sanitize-id (format "~a" (syntax->datum #'e)))])))
       (format
        "~a~a"

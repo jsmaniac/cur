@@ -32,14 +32,32 @@
     [define real-define]))
 
 (begin-for-syntax
-  (define-syntax-class result-type
-    (pattern type:expr))
+  (define (deduce-type-error term expected)
+    (format
+     "Expected ~a ~a, but ~a."
+     (syntax->datum term)
+     expected
+     (syntax-parse term
+       [x:id
+        "seems to be an unbound variable"]
+       [_ "could not infer a type."])))
+
+  (define-syntax-class cur-term
+    (pattern
+     e:expr
+     #:attr type (type-infer/syn #'e)
+     ;; TODO: Reduce to smallest failing example.
+     #:fail-unless
+     (attribute type)
+     (deduce-type-error
+      #'e
+      "to be a well-typed Cur term")))
 
   (define-syntax-class parameter-declaration
-    (pattern (name:id (~datum :) type:expr))
+    (pattern (name:id (~datum :) type:cur-term))
 
     (pattern
-     type:expr
+     type:cur-term
      #:attr name (format-id #'type "~a" (gensym 'anon-parameter)))))
 
 ;; A multi-arity function type; takes parameter declaration of either
@@ -48,7 +66,7 @@
 ;; (-> (A : Type) A A)
 (define-syntax (-> syn)
   (syntax-parse syn
-    [(_ d:parameter-declaration ...+ result:result-type)
+    [(_ d:parameter-declaration ...+ result:cur-term)
      (foldr (lambda (src name type r)
               (quasisyntax/loc src
                 (forall (#,name : #,type) #,r)))
@@ -83,16 +101,6 @@
             (attribute d.type))]))
 
 (begin-for-syntax
-  (define (deduce-type-error term expected)
-    (format
-     "Expected ~a ~a, but ~a."
-     (syntax->datum term)
-     expected
-     (syntax-parse term
-      [x:id
-       "seems to be an unbound variable"]
-      [_ "could not infer a type."])))
-
   (define-syntax-class forall-type
     (pattern
      ((~literal forall) ~! (parameter-name:id (~datum :) parameter-type) body)))
@@ -111,18 +119,7 @@
      (format
       "Expected ~a to be a function, but inferred type ~a"
       (syntax->datum #'e)
-      (syntax->datum (attribute type)))))
-
-  (define-syntax-class cur-term
-    (pattern
-     e:expr
-     #:attr type (type-infer/syn #'e)
-     ;; TODO: Reduce to smallest failing example.
-     #:fail-unless
-     (attribute type)
-     (deduce-type-error
-      #'e
-      "to be a well-typed Cur term"))))
+      (syntax->datum (attribute type))))))
 
 (define-syntax (#%app syn)
   (syntax-parse syn

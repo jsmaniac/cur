@@ -260,13 +260,15 @@
   ;; Takes a Cur term syn and an arbitrary number of identifiers ls. The cur term is
   ;; expanded until expansion reaches a Curnel form, or one of the
   ;; identifiers in ls.
-  (define (cur-expand syn . ls)
-    (disarm
-      (local-expand
+  ;; TODO: Holy crap boilerplate
+  (define (cur-expand syn #:local-env [env '()] . ls)
+    (parameterize ([gamma (local-env->gamma env)])
+      (disarm
+       (local-expand
         syn
         'expression
         (append (syntax-e #'(Type dep-inductive dep-lambda dep-app dep-elim dep-forall dep-top))
-                ls)))))
+                ls))))))
 
 ;; -----------------------------------------------------------------
 ;; Require/provide macros
