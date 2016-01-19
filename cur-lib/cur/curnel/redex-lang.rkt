@@ -226,10 +226,16 @@
   ;; TODO: Reflection tools should catch errors from eval-cur et al. to
   ;; ensure users can provide better error messages.
 
-  (define (normalize/syn syn)
-    (datum->cur
-      syn
-      (eval-cur syn)))
+  (define (local-env->gamma env)
+    (for/fold ([gamma (gamma)])
+              ([(x t) (in-dict env)])
+      (extend-Γ/syn (thunk gamma) x t)))
+
+  (define (normalize/syn syn  #:local-env [env '()])
+    (parameterize ([gamma (local-env->gamma env)])
+      (datum->cur
+       syn
+       (eval-cur syn))))
 
   (define (step/syn syn)
     (datum->cur
@@ -242,9 +248,7 @@
 
   ;; TODO: Document local-env
   (define (type-infer/syn syn #:local-env [env '()])
-    (parameterize ([gamma (for/fold ([gamma (gamma)])
-                                    ([(x t) (in-dict env)])
-                            (extend-Γ/syn (thunk gamma) x t))])
+    (parameterize ([gamma (local-env->gamma env)])
       (with-handlers ([values (lambda _ #f)])
         (let ([t (type-infer/term (eval-cur syn))])
         (and t (datum->cur syn t))))))
