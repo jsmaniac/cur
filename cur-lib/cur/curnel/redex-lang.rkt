@@ -223,6 +223,8 @@
       (term (reduce #,(delta) (subst-all #,(cur->datum syn) #,(first (bind-subst)) #,(second (bind-subst)))))))
 
   ;; Reflection tools
+  ;; TODO: Reflection tools should catch errors from eval-cur et al. to
+  ;; ensure users can provide better error messages.
 
   (define (normalize/syn syn)
     (datum->cur
@@ -243,11 +245,13 @@
     (parameterize ([gamma (for/fold ([gamma (gamma)])
                                     ([(x t) (in-dict env)])
                             (extend-Γ/syn (thunk gamma) x t))])
-      (let ([t (type-infer/term (eval-cur syn))])
-        (and t (datum->cur syn t)))))
+      (with-handlers ([values (lambda _ #f)])
+        (let ([t (type-infer/term (eval-cur syn))])
+        (and t (datum->cur syn t))))))
 
   (define (type-check/syn? syn type)
-    (type-check/term? (eval-cur syn) (eval-cur type)))
+    (with-handlers ([values (lambda _ #f)])
+      (type-check/term? (eval-cur syn) (eval-cur type))))
 
   ;; Takes a Cur term syn and an arbitrary number of identifiers ls. The cur term is
   ;; expanded until expansion reaches a Curnel form, or one of the

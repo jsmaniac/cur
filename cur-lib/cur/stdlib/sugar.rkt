@@ -82,17 +82,86 @@
             (attribute d.name)
             (attribute d.type))]))
 
-;; TODO: This makes for really bad error messages when an identifier is undefined.
+(begin-for-syntax
+  (define (deduce-type-error term expected)
+    (format
+     "Expected ~a ~a, but ~a."
+     (syntax->datum term)
+     expected
+     (syntax-parse term
+      [x:id
+       "seems to be an unbound variable"]
+      [_ "could not infer a type."])))
+
+  (define-syntax-class forall-type
+    (pattern
+     ((~literal forall) ~! (arg:id (~datum :) arg-type) body)))
+
+  (define-syntax-class nested-forall-type
+    (pattern
+     ((~literal forall) ~! (arg:id (~datum :) arg-type) body:nested-forall-type)
+     #:attr parameters
+     (cons #'arg (attribute body.parameters))
+     #:attr parameter-types
+     (cons #'arg-type (attribute body.parameter-types)))
+
+    (pattern
+     e
+     #:attr parameters '()
+     #:attr parameter-types '()))
+
+  (define-syntax-class cur-function
+    (pattern
+     e:expr
+     #:attr type (type-infer/syn #'e)
+     #:fail-unless (attribute type)
+     (deduce-type-error
+      #'e
+      "to be a function")
+     #:fail-unless (syntax-parse (attribute type)
+                     [t:forall-type #t]
+                     [_ #f])
+     (format
+      "Expected ~a to be a function, but inferred type ~a"
+      (syntax->datum #'e)
+      (syntax->datum (attribute type)))
+     #:attr parameter-types
+     (let ()
+       (define/syntax-parse (~and pret:forall-type ~! t:nested-forall-type) (attribute type))
+       (attribute t.parameter-types))))
+
+  (define-syntax-class cur-term
+    (pattern
+     e:expr
+     #:attr type (type-infer/syn #'e)
+     ;; TODO: Reduce to smallest failing example.
+     #:fail-unless
+     (attribute type)
+     (deduce-type-error
+      #'e
+      "to be a well-typed Cur term"))))
+
 (define-syntax (#%app syn)
-  (syntax-case syn ()
-    [(_ e)
-     (quasisyntax/loc syn e)]
-    [(_ e1 e2)
-     (quasisyntax/loc syn
-       (real-app e1 e2))]
-    [(_ e1 e2 e3 ...)
-     (quasisyntax/loc syn
-       (#%app (#%app e1 e2) e3 ...))]))
+  (syntax-parse syn
+    [(_ f:cur-function ~! e:cur-term ...+)
+     (for ([arg (attribute e)]
+           [inferred-type (attribute e.type)]
+           [expected-type (attribute f.parameter-types)])
+       (unless (type-check/syn? arg expected-type)
+         (raise-syntax-error
+          '#%app
+          (format
+           "Expected ~a to have type ~a, but inferred type ~a."
+           (syntax->datum arg)
+           (syntax->datum expected-type)
+           (syntax->datum inferred-type))
+          syn
+          arg)))
+     (for/fold ([app (quasisyntax/loc syn
+                       (real-app f #,(first (attribute e))))])
+               ([arg (rest (attribute e))])
+       (quasisyntax/loc arg
+         (real-app #,app #,arg)))]))
 
 (define-syntax define-type
   (syntax-rules ()
