@@ -96,13 +96,12 @@
                          (thunk
                           (for/fold ([strs ""]
                                      [local-env (dict-set local-env #'n #'t)])
-                                    ([clause (syntax->list #'((x* : t*) ...))])
-                            (syntax-parse clause
-                               [(x (~datum :) t)
-                                (values
-                                 (format "~a~n| ~a : ~a" strs (syntax-e #'x)
-                                         (cur->coq #'t local-env))
-                                 (dict-set local-env #'x #'t))])))
+                                    ([x (attribute x*)]
+                                     [t (attribute t*)])
+                            (values
+                             (format "~a~n| ~a : ~a" strs (syntax-e x)
+                                     (cur->coq t local-env))
+                             (dict-set local-env x t))))
                          (lambda (x y) x))))
                "")]
             [(Type i) "Type"]
@@ -207,6 +206,7 @@
               lab:rule-name
               (~var t (conclusion name indices (attribute lab))))
              #:with constr-decl
+             ;; TODO: quasisyntax/loc
              #'(lab : (-> h ... (t.name t.arg ...)))
              ;; TODO: convert meta-vars such as e1 to e_1
              #:attr latex

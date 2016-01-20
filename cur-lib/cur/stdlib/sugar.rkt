@@ -31,7 +31,39 @@
     [lambda real-lambda]
     [define real-define]))
 
+;; Exceptions and such
 (begin-for-syntax
+  (define-struct (exn:cur:type exn:cur) () #:transparent)
+
+  (define (raise-cur-type-infer-error name v . other)
+    (format
+     "~aCur type error;~n  Could not infer any type~n    term: ~a~a"
+     (if name (format "~a:" name) "")
+     v
+     (for/fold ([str ""])
+               ([other other])
+       (format "~a~n    context: ~a" str other)))))
+
+(begin-for-syntax
+  #| TODO
+   | Design of "typed" macros for Cur.
+   |
+   | We can use syntax classes to emulate typed macros. The syntax
+   | class calls the type-checker to ensure the term parsed term is
+   | well-typed. This *must* not expand the the matched type as a side-effect.
+   | Unfortunately, to handle binding, patterns that have variables
+   | must thread binding information through while parsing in syntax
+   | parse. This would be simple if we had implicit monad syntax for
+   | it, but otherwise we must explicitly thread the environment
+   | information through the syntax classes. How annoying.
+   |
+   | Ideas:
+   |   Could create a "env" compile-time parameter...
+   |   Could expose Gamma, in some way...
+   |   Could use Racket namespaces? Might requrie abandoning Redex
+   |
+   |
+   |#
   (define (deduce-type-error term expected)
     (format
      "Expected ~a ~a, but ~a."
@@ -42,38 +74,68 @@
         "seems to be an unbound variable"]
        [_ "could not infer a type."])))
 
-  (define-syntax-class cur-term
+  (define-syntax-class cur-syntax
+    (pattern e:expr))
+
+  (define-syntax-class well-typed-cur-term
     (pattern
-     e:expr
+     e:cur-syntax
      #:attr type (type-infer/syn #'e)
-     ;; TODO: Reduce to smallest failing example.
-     #:fail-unless
-     (attribute type)
-     (deduce-type-error
-      #'e
-      "to be a well-typed Cur term")))
+     #:fail-unless (attribute type)
+     (raise-cur-type-infer-error #f #'e))))
 
+;; For delaying a type-check until the term is under a binder
+;; NB: This is an impressively awesome solution..... need to write something about it.
+(define-syntax (delayed-check syn)
+  (syntax-parse syn
+    [(_ e:well-typed-cur-term) #'e]))
+
+(begin-for-syntax
   (define-syntax-class parameter-declaration
-    (pattern (name:id (~datum :) type:cur-term))
+    #:commit
+    (pattern
+     (name:id (~datum :) ~! type:cur-syntax))
 
     (pattern
-     type:cur-term
-     #:attr name (format-id #'type "~a" (gensym 'anon-parameter)))))
+     type:cur-syntax
+     ;; NB: Anonymous parameters are not bound in the local env
+     #:attr name (format-id #'type "~a" (gensym 'anon-parameter))))
+
+  (define-syntax-class well-typed-parameter-declaration
+    #:commit
+    (pattern
+     (name:id (~datum :) ~! _type:cur-syntax)
+     #:attr type #'(delayed-check _type))
+
+    (pattern
+     _type:cur-syntax
+     ;; TODO: Duplicate code in parameter-declaration
+     #:attr type #'(delayed-check _type)
+     #:attr name (format-id #'type "~a" (gensym 'anon-parameter))))
+
+  (define-syntax-class well-typed-parameter-list
+    (pattern
+     (d:well-typed-parameter-declaration ...+)
+     #:attr names (attribute d.name)
+     #:attr types (attribute d.type))))
 
 ;; A multi-arity function type; takes parameter declaration of either
 ;; a binding (name : type), or type whose name is generated.
 ;; E.g.
 ;; (-> (A : Type) A A)
+
 (define-syntax (-> syn)
   (syntax-parse syn
-    [(_ d:parameter-declaration ...+ result:cur-term)
+    [(_ d:parameter-declaration ...+ e:cur-syntax)
+     #:with ds #'(d ...)
+     #:declare ds well-typed-parameter-list
      (foldr (lambda (src name type r)
               (quasisyntax/loc src
                 (forall (#,name : #,type) #,r)))
-            #'result
-            (attribute d)
-            (attribute d.name)
-            (attribute d.type))]))
+            #'(delayed-check e)
+            (syntax->list (attribute ds))
+            (attribute ds.names)
+            (attribute ds.types))]))
 
 ;; TODO: Add forall macro that allows specifying *names*, with types
 ;; inferred. unlike -> which require types but not names
@@ -82,23 +144,18 @@
 
 ;; TODO: Allows argument-declarations to have types inferred, similar
 ;; to above TODO forall
-(begin-for-syntax
-  ;; eta-expand syntax-class for error messages
-  (define-syntax-class argument-declaration
-    (pattern
-     e:parameter-declaration
-     #:attr name #'e.name
-     #:attr type #'e.type)))
 (define-syntax (lambda syn)
   (syntax-parse syn
-    [(_ d:argument-declaration ...+ body:expr)
+    [(_ d:parameter-declaration ... e:cur-syntax)
+     #:with ds #'(d ...)
+     #:declare ds well-typed-parameter-list
      (foldr (lambda (src name type r)
               (quasisyntax/loc src
                 (real-lambda (#,name : #,type) #,r)))
-            #'body
-            (attribute d)
-            (attribute d.name)
-            (attribute d.type))]))
+            #'(delayed-check e)
+            (syntax->list (attribute ds))
+            (attribute ds.names)
+            (attribute ds.types))]))
 
 (begin-for-syntax
   (define-syntax-class forall-type
@@ -123,7 +180,7 @@
 
 (define-syntax (#%app syn)
   (syntax-parse syn
-    [(_ f:cur-function ~! e:cur-term ...+)
+    [(_ f:well-typed-cur-term ~! e:well-typed-cur-term ...+)
      ;; Have to thread each argument through, to handle dependency.
      (for/fold ([type (attribute f.type)])
                ([arg (attribute e)]
@@ -143,8 +200,8 @@
        (normalize/syn
         #`(real-app
            (real-lambda (expected.parameter-name : expected.parameter-type)
-            expected.body)
-          #,arg)))
+                        expected.body)
+           #,arg)))
      (for/fold ([app (quasisyntax/loc syn
                        (real-app f #,(first (attribute e))))])
                ([arg (rest (attribute e))])

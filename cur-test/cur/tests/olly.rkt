@@ -6,6 +6,9 @@
 (require
  rackunit
  cur/stdlib/sugar
+ cur/stdlib/nat
+ cur/stdlib/bool
+ cur/stdlib/prop
  cur/olly)
 
 (begin-for-syntax
@@ -30,28 +33,28 @@
    "(forall .+ : Type, Type)"
    (cur->coq #'(-> Type Type)))
   (let ([t (cur->coq
-            #'(define-relation (meow gamma term type)
-                [(g : gamma) (e : term) (t : type)
+            #'(define-relation (meow Nat Bool Nat)
+                [(n : Nat) (b : Bool) (m : Nat)
                  --------------- T-Bla
-                 (meow g e t)]))])
+                 (meow n b m)]))])
     (check-regexp-match
-     "Inductive meow : \\(forall .+ : gamma, \\(forall .+ : term, \\(forall .+ : type, Type\\)\\)\\) :="
+     "Inductive meow : \\(forall .+ : Nat, \\(forall .+ : Bool, \\(forall .+ : Nat, Type\\)\\)\\) :="
      (first (string-split t "\n")))
     (check-regexp-match
-     "\\| T-Bla : \\(forall g : gamma, \\(forall e : term, \\(forall t : type, \\(\\(\\(meow g\\) e\\) t\\)\\)\\)\\)\\."
+     "\\| T-Bla : \\(forall n : Nat, \\(forall b : Bool, \\(forall m : Nat, \\(\\(\\(meow n\\) b\\) m\\)\\)\\)\\)\\."
      (second (string-split t "\n"))))
   (let ([t (cur->coq
-            #'(elim nat Type (lambda (x : nat) nat) z
-                    (lambda (x : nat) (ih-x : nat) ih-x)
-                    e))])
+            #'(elim Nat Type (lambda (x : Nat) Nat) z
+                    (lambda (x : Nat) (ih-x : Nat) ih-x)
+                    z))])
     (check-regexp-match
-     "\\(\\(\\(\\(nat_rect \\(fun x : nat => nat\\)\\) z\\) \\(fun x : nat => \\(fun ih_x : nat => ih_x\\)\\)\\) e\\)"
+     "\\(\\(\\(\\(Nat_rect \\(fun x : Nat => Nat\\)\\) z\\) \\(fun x : Nat => \\(fun ih_x : Nat => ih_x\\)\\)\\) z\\)"
      t))
   (check-regexp-match
-   "Definition thm_plus_commutes := \\(forall n : nat, \\(forall m : nat, \\(\\(\\(== nat\\) \\(\\(plus n\\) m\\)\\) \\(\\(plus m\\) n\\)\\)\\)\\).\n"
+   "Definition thm_plus_commutes := \\(forall n : Nat, \\(forall m : Nat, \\(\\(\\(== Nat\\) \\(\\(plus n\\) m\\)\\) \\(\\(plus m\\) n\\)\\)\\)\\).\n"
    (cur->coq
-    #'(define thm:plus-commutes (forall (n : nat) (m : nat)
-                                        (== nat (plus n m) (plus m n))))))
+    #'(define thm:plus-commutes (forall (n : Nat) (m : Nat)
+                                        (== Nat (plus n m) (plus m n))))))
   (check-regexp-match
-   "Function add1 \\(n : nat\\)  := \\(s n\\).\n"
-   (cur->coq #'(define (add1 (n : nat)) (s n)))))
+   "Function add1 \\(n : Nat\\)  := \\(s n\\).\n"
+   (cur->coq #'(define (add1 (n : Nat)) (s n)))))

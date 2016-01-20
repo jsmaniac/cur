@@ -58,13 +58,41 @@
    (all-from-out syntax/parse)
    (all-from-out racket)
    (all-from-out racket/syntax)
-    cur->datum
-    cur-expand
-    type-infer/syn
-    type-check/syn?
-    normalize/syn
-    step/syn
-    cur-equal?))
+   raise-curnel-type-error
+   raise-curnel-syntax-error
+   cur->datum
+   cur-expand
+   type-infer/syn
+   type-check/syn?
+   normalize/syn
+   step/syn
+   cur-equal?))
+
+;; Exceptions
+(begin-for-syntax
+  (provide
+   (struct-out exn:cur)
+   (struct-out exn:cur:curnel)
+   (struct-out exn:cur:curnel:type)
+   (struct-out exn:cur:curnel:syntax))
+  (define-struct (exn:cur exn) () #:transparent)
+  (define-struct (exn:cur:curnel exn:cur) () #:transparent)
+  (define-struct (exn:cur:curnel:type exn:cur) () #:transparent)
+  (define-struct (exn:cur:curnel:syntax exn:cur) () #:transparent)
+
+  (define (raise-curnel-type-error name v . other)
+    (raise
+     (make-exn:cur:curnel:type
+      (for/fold ([msg (format "~a: Cur type error;~n  Typing judgment did not hold in Curnel~n    term: ~a" name v)])
+                ([t other])
+        (format "~a~n   additional context: ~a" msg t))
+      (current-continuation-marks))))
+
+  (define (raise-curnel-syntax-error name v [more ""])
+    (raise
+     (make-exn:cur:curnel:syntax
+      (format "~a: Cur syntax error;~n  Term is invalid Curnel syntax;~a~n    term: ~a" name more v)
+      (current-continuation-marks)))))
 
 (begin-for-syntax
   ;; TODO: Gamma and Delta seem to get reset inside a module+
@@ -73,7 +101,7 @@
       (term ∅)
       (lambda (x)
         (unless (Γ? x)
-          (error 'core-error "We built a bad term environment ~s" x))
+          (raise-curnel-syntax-error 'term-environment "term is not a well-formed Γ"))
         x)))
 
   (define delta
@@ -81,7 +109,7 @@
       (term ∅)
       (lambda (x)
         (unless (Δ? x)
-          (error 'core-error "We built a bad inductive declaration ~s" x))
+          (raise-curnel-syntax-error 'inductive-delcaration x "term is not a well-formed Δ"))
         x)))
 
   ;; These should be provided by core, so details of envs can be hidden.
@@ -118,7 +146,7 @@
      (list null null)
      (lambda (x)
        (unless (subst? x)
-           (error 'core-error "We build a bad subst ~s" x))
+         (raise-curnel-syntax-error 'top-level-bindings x))
        x)))
 
   (define (add-binding/term! x t)
@@ -156,8 +184,6 @@
   (define (cur->datum syn)
     ;; Main loop; avoid type
     (define reified-term
-      ;; TODO: This results in less good error messages. Add an
-      ;; algorithm to find the smallest ill-typed term.
       (parameterize ([inner-expand? #t])
         (let cur->datum ([syn syn])
           (syntax-parse (core-expand syn)
@@ -185,7 +211,7 @@
              (term (,(cur->datum #'e1) ,(cur->datum #'e2)))]))))
     (unless (or (inner-expand?) (type-infer/term reified-term))
       #;(printf "Delta: ~s~nGamma: ~s~n" (delta) (gamma))
-      (raise-syntax-error 'cur "term is ill-typed:" reified-term syn))
+      (raise-curnel-type-error 'cur->datum reified-term syn))
     reified-term)
 
   (define (datum->cur syn t)
@@ -223,8 +249,8 @@
       (term (reduce #,(delta) (subst-all #,(cur->datum syn) #,(first (bind-subst)) #,(second (bind-subst)))))))
 
   ;; Reflection tools
-  ;; TODO: Reflection tools should catch errors from eval-cur et al. to
-  ;; ensure users can provide better error messages.
+  ;; TODO: Reflection tools should catch internal errors, e.g., from eval-cur et al. to
+  ;; ensure users can provide better error messages. But should not catch errors caused by user macros.
 
   (define (local-env->gamma env)
     (for/fold ([gamma (gamma)])
@@ -247,14 +273,14 @@
     (and (judgment-holds (equivalent ,(delta) ,(eval-cur e1) ,(eval-cur e2))) #t))
 
   ;; TODO: Document local-env
-  (define (type-infer/syn syn #:local-env [env '()])
+  (define (type-infer/syn #:local-env [env '()] syn)
     (parameterize ([gamma (local-env->gamma env)])
-      (with-handlers ([values (lambda _ #f)])
+      (with-handlers ([exn:cur:curnel:type? (lambda _ #f)])
         (let ([t (type-infer/term (eval-cur syn))])
         (and t (datum->cur syn t))))))
 
   (define (type-check/syn? syn type)
-    (with-handlers ([values (lambda _ #f)])
+    (with-handlers ([exn:cur:curnel:type? (lambda _ #f)])
       (type-check/term? (eval-cur syn) (eval-cur type))))
 
   ;; Takes a Cur term syn and an arbitrary number of identifiers ls. The cur term is
