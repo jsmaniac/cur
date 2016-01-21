@@ -35,14 +35,27 @@
 (begin-for-syntax
   (define-struct (exn:cur:type exn:cur) () #:transparent)
 
-  (define (raise-cur-type-infer-error name v . other)
+  (define (deduce-type-infer-error-hints term)
+    (syntax-parse term
+      [x:id
+       "; Seems to be an unbound variable"]
+      [_ "could not infer a type."]))
+
+  (define (cur-type-infer-error-msg name v . other)
     (format
-     "~aCur type error;~n  Could not infer any type~n    term: ~a~a"
+     "~aCur type error;~n  Could not infer any type~a~n    term: ~a~a"
      (if name (format "~a:" name) "")
+     (deduce-type-infer-error-hints v)
      v
      (for/fold ([str ""])
                ([other other])
-       (format "~a~n    context: ~a" str other)))))
+       (format "~a~n    context: ~a" str other))))
+
+  (define (raise-cur-type-infer-error . all)
+    (raise
+     (make-exn:cur:type
+      (apply cur-type-infer-error-msg all)
+      (current-continuation-marks)))))
 
 (begin-for-syntax
   #| TODO
@@ -50,30 +63,14 @@
    |
    | We can use syntax classes to emulate typed macros. The syntax
    | class calls the type-checker to ensure the term parsed term is
-   | well-typed. This *must* not expand the the matched type as a side-effect.
+   | well-typed. This *must* not expand the the matched term as a side-effect.
    | Unfortunately, to handle binding, patterns that have variables
    | must thread binding information through while parsing in syntax
-   | parse. This would be simple if we had implicit monad syntax for
-   | it, but otherwise we must explicitly thread the environment
-   | information through the syntax classes. How annoying.
-   |
-   | Ideas:
-   |   Could create a "env" compile-time parameter...
-   |   Could expose Gamma, in some way...
-   |   Could use Racket namespaces? Might requrie abandoning Redex
-   |
+   | parse.
+   | This can be handled by delaying the expansion and syntax-class
+   | check until the term is under the binder; see delay-check macros.
    |
    |#
-  (define (deduce-type-error term expected)
-    (format
-     "Expected ~a ~a, but ~a."
-     (syntax->datum term)
-     expected
-     (syntax-parse term
-       [x:id
-        "seems to be an unbound variable"]
-       [_ "could not infer a type."])))
-
   (define-syntax-class cur-syntax
     (pattern e:expr))
 
@@ -82,7 +79,7 @@
      e:cur-syntax
      #:attr type (type-infer/syn #'e)
      #:fail-unless (attribute type)
-     (raise-cur-type-infer-error #f #'e))))
+     (cur-type-infer-error-msg #f #'e))))
 
 ;; For delaying a type-check until the term is under a binder
 ;; NB: This is an impressively awesome solution..... need to write something about it.
@@ -98,24 +95,31 @@
 
     (pattern
      type:cur-syntax
-     ;; NB: Anonymous parameters are not bound in the local env
      #:attr name (format-id #'type "~a" (gensym 'anon-parameter))))
 
   (define-syntax-class well-typed-parameter-declaration
     #:commit
     (pattern
-     (name:id (~datum :) ~! _type:cur-syntax)
-     #:attr type #'(delayed-check _type))
+     e:parameter-declaration
+     #:attr type #'(delayed-check e.type)
+     #:attr name #'e.name))
 
+  (define-syntax-class well-typed-argument-declaration
+    #:commit
     (pattern
-     _type:cur-syntax
-     ;; TODO: Duplicate code in parameter-declaration
-     #:attr type #'(delayed-check _type)
-     #:attr name (format-id #'type "~a" (gensym 'anon-parameter))))
+     ;; TODO: Copy pasta from parameter-declaration
+     (name:id (~datum :) ~! _type:cur-syntax)
+     #:attr type #'(delayed-check _type)))
 
   (define-syntax-class well-typed-parameter-list
     (pattern
      (d:well-typed-parameter-declaration ...+)
+     #:attr names (attribute d.name)
+     #:attr types (attribute d.type)))
+
+  (define-syntax-class well-typed-argument-list
+    (pattern
+     (d:well-typed-argument-declaration ...+)
      #:attr names (attribute d.name)
      #:attr types (attribute d.type))))
 
@@ -146,9 +150,9 @@
 ;; to above TODO forall
 (define-syntax (lambda syn)
   (syntax-parse syn
-    [(_ d:parameter-declaration ... e:cur-syntax)
+    [(_ d:parameter-declaration ...+ e:cur-syntax)
      #:with ds #'(d ...)
-     #:declare ds well-typed-parameter-list
+     #:declare ds well-typed-argument-list
      (foldr (lambda (src name type r)
               (quasisyntax/loc src
                 (real-lambda (#,name : #,type) #,r)))
@@ -162,25 +166,21 @@
     (pattern
      ((~literal forall) ~! (parameter-name:id (~datum :) parameter-type) body)))
 
-  (define-syntax-class cur-function
+  (define-syntax-class well-typed-cur-function
     (pattern
-     e:expr
-     #:attr type (type-infer/syn #'e)
-     #:fail-unless (attribute type)
-     (deduce-type-error
-      #'e
-      "to be a function")
-     #:fail-unless (syntax-parse (attribute type)
+     e:well-typed-cur-term
+     #:attr type (attribute e.type)
+     #:fail-unless (syntax-parse (attribute e.type)
                      [t:forall-type #t]
                      [_ #f])
      (format
       "Expected ~a to be a function, but inferred type ~a"
       (syntax->datum #'e)
-      (syntax->datum (attribute type))))))
+      (syntax->datum (attribute e.type))))))
 
 (define-syntax (#%app syn)
   (syntax-parse syn
-    [(_ f:well-typed-cur-term ~! e:well-typed-cur-term ...+)
+    [(_ f:well-typed-cur-function ~! e:well-typed-cur-term ...+)
      ;; Have to thread each argument through, to handle dependency.
      (for/fold ([type (attribute f.type)])
                ([arg (attribute e)]
@@ -422,6 +422,8 @@
           (syntax->datum #'id))
          syn)))]))
 
+;; TODO: Better error messages; follow pattern of -> and lambda etc to first parse, then type-check.
+;; TODO: Deprecate #:local-env
 (define-syntax (match syn)
   (syntax-parse syn
     [(_ d
