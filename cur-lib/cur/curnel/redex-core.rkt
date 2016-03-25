@@ -312,10 +312,7 @@
   ;; call-by-value
   (E  ::= hole (E e) (v E)
       (elim D e (e ...) (v ... E e ...) e)
-      (elim D e (e ...) (v ...) E)
-      ;; reduce under Π (helps with typing checking)
-      ;; TODO: Should be done in conversion judgment
-      (Π (x : v) E) (Π (x : E) e)))
+      (elim D e (e ...) (v ...) E)))
 
 (define-metafunction tt-ctxtL
   is-inductive-argument : Δ_0 D_0 t -> #t or #f
@@ -392,20 +389,29 @@
   (Γ   ::= ∅ (Γ x : t)))
 
 (define-judgment-form tt-typingL
-  #:mode (convert I I I I)
-  #:contract (convert Δ Γ t t)
+  #:mode (sub I I I I)
+  #:contract (sub Δ Γ t t)
+
+  [-------------
+   (sub Δ Γ t t)]
 
   [(side-condition ,(<= (term i_0) (term i_1)))
    ----------------- "≼-Unv"
-   (convert Δ Γ (Unv i_0) (Unv i_1))]
+   (sub Δ Γ (Unv i_0) (Unv i_1))]
 
-  [(where (t t) ((reduce Δ t_0) (reduce Δ t_1)))
-   ----------------- "≼-αβ"
-   (convert Δ Γ t_0 t_1)]
-
-  [(convert Δ (Γ x : t_0) t_1 t_2)
+  [(convert Δ Γ t_0 t_1)
+   (convert Δ (Γ x_0 : t_0) e_0 (subst e_1 x_1 x_0))
    ----------------- "≼-Π"
-   (convert Δ Γ (Π (x : t_0) t_1) (Π (x : t_0) t_2))])
+   (sub Δ Γ (Π (x_0 : t_0) e_0) (Π (x_1 : t_1) e_1))])
+
+(define-judgment-form tt-typingL
+  #:mode (convert I I I I)
+  #:contract (convert Δ Γ t t)
+
+  [(where (t_2 t_3) ((reduce Δ t_0) (reduce Δ t_1)))
+   (sub Δ Γ t_2 t_3)
+   ----------------- "≼-αβ"
+   (convert Δ Γ t_0 t_1)])
 
 (define-metafunction tt-typingL
   Γ-in-dom : Γ x -> #t or #f
