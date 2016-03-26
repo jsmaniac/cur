@@ -357,16 +357,28 @@
   (Θv ::= hole (Θv v))
   (E  ::= hole (E e) (v E)
       (elim D e (e ...) (v ... E e ...) e)
-      (elim D e (e ...) (v ...) E)))
+      (elim D e (e ...) (v ...) E)
+      ;; NB: These seem necessary, despite fixed conversion relation.
+      (Π (x : E) e) (Π (x : v) E)))
 
 (define-extended-language tt-cbnL tt-cbvL
   (E  ::= hole (E e) (elim D e (e ...) (e ...) E)))
 
-(define (tt-->cbv D) (context-closure (tt--> D) tt-cbvL E))
+(define-extended-language tt-head-redL tt-cbvL
+  (C-λ ::= Θ (λ (x : t) C-λ))
+  (λv  ::= x U (Π (x : t) t) (elim D e (e ...) (e ...) (in-hole C-λ x)))
+  (v ::= (in-hole C-λ λv)))
+
 ;; Lazyness has lots of implications, such as on conversion and test suite.
 (define (tt-->cbn D) (context-closure (tt--> D) tt-cbnL E))
-;; Full reduction seems to loop forever
+;; NB: Note that CIC specifies reduction via "contextual closure".
+;; Perhaps they mean compatible-closure. Unfortunately, it's too slow.
 (define (tt-->full D) (compatible-closure (tt--> D) tt-redL e))
+;; Head reduction
+(define (tt-->head-red D) (context-closure (tt--> D) tt-head-redL C-λ))
+
+;; CBV, plus under Π
+(define (tt-->cbv D) (context-closure (tt--> D) tt-cbvL E))
 
 (define-metafunction tt-redL
   reduce : Δ e -> e
@@ -382,29 +394,33 @@
   (Γ   ::= ∅ (Γ x : t)))
 
 (define-judgment-form tt-typingL
-  #:mode (sub I I I I)
-  #:contract (sub Δ Γ t t)
-
-  [-------------
-   (sub Δ Γ t t)]
-
-  [(side-condition ,(<= (term i_0) (term i_1)))
-   ----------------- "≼-Unv"
-   (sub Δ Γ (Unv i_0) (Unv i_1))]
-
-  [(convert Δ Γ t_0 t_1)
-   (convert Δ (Γ x_0 : t_0) e_0 (subst e_1 x_1 x_0))
-   ----------------- "≼-Π"
-   (sub Δ Γ (Π (x_0 : t_0) e_0) (Π (x_1 : t_1) e_1))])
-
-(define-judgment-form tt-typingL
   #:mode (convert I I I I)
   #:contract (convert Δ Γ t t)
 
-  [(where (t_2 t_3) ((reduce Δ t_0) (reduce Δ t_1)))
-   (sub Δ Γ t_2 t_3)
-   ----------------- "≼-αβ"
+  [----------------- "≡-Base"
+   (convert Δ Γ t t)]
+
+  [(where (t_!_0 ...) (t_0 t_1))
+   (where (t t) ((reduce Δ t_0) (reduce Δ t_1)))
+   ----------------- "≡-Normal"
    (convert Δ Γ t_0 t_1)])
+
+(define-judgment-form tt-typingL
+  #:mode (subtype I I I I)
+  #:contract (subtype Δ Γ t t)
+
+  [(convert Δ Γ t_0 t_1)
+   ------------- "≼-≡"
+   (subtype Δ Γ t_0 t_1)]
+
+  [(side-condition ,(<= (term i_0) (term i_1)))
+   ----------------- "≼-Unv"
+   (subtype Δ Γ (Unv i_0) (Unv i_1))]
+
+  [(convert Δ Γ t_0 t_1)
+   (subtype Δ (Γ x_0 : t_0) e_0 (subst e_1 x_1 x_0))
+   ----------------- "≼-Π"
+   (subtype Δ Γ (Π (x_0 : t_0) e_0) (Π (x_1 : t_1) e_1))])
 
 (define-metafunction tt-typingL
   Γ-in-dom : Γ x -> #t or #f
@@ -515,20 +531,18 @@
    ----------------- "DTR-Start"
    (type-infer Δ Γ x t)]
 
-  [(type-infer Δ (Γ x : t_0) e t_1)
-   (type-infer Δ Γ (Π (x : t_0) t_1) U)
+  [(type-infer-normal Δ (Γ x : t_0) e t_1)
+   (type-infer-normal Δ Γ (Π (x : t_0) t_1) U)
    ----------------- "DTR-Abstraction"
    (type-infer Δ Γ (λ (x : t_0) e) (Π (x : t_0) t_1))]
 
-  [(type-infer Δ Γ t_0 U_1)
-   (type-infer Δ (Γ x : t_0) t U_2)
+  [(type-infer-normal Δ Γ t_0 U_1)
+   (type-infer-normal Δ (Γ x : t_0) t U_2)
    (unv-pred U_1 U_2 U)
    ----------------- "DTR-Product"
    (type-infer Δ Γ (Π (x : t_0) t) U)]
 
-  [(type-infer Δ Γ e_0 t)
-   ;; Cannot rely on type-infer producing normal forms.
-   (where (Π (x_0 : t_0) t_1) (reduce Δ t))
+  [(type-infer-normal Δ Γ e_0 (Π (x_0 : t_0) t_1))
    (type-check Δ Γ e_1 t_0)
    (where t_3 (subst t_1 x_0 e_1))
    ----------------- "DTR-Application"
@@ -536,20 +550,32 @@
 
   [(type-check Δ Γ e_c (apply D e_i ...))
 
-   (type-infer Δ Γ e_motive (name t_motive (in-hole Ξ U)))
-   (convert Δ Γ t_motive (Δ-motive-type Δ D U))
+   (type-infer-normal Δ Γ e_motive (name t_motive (in-hole Ξ U)))
+   (subtype Δ Γ t_motive (Δ-motive-type Δ D U))
 
    (where (t_m ...) (Δ-method-types Δ D e_motive))
+
    (type-check Δ Γ e_m t_m) ...
    ----------------- "DTR-Elim_D"
    (type-infer Δ Γ (elim D e_motive (e_i ...) (e_m ...) e_c)
                (apply e_motive e_i ... e_c))])
+
+;; Try to keep types in normal form, which simplifies a few things
+(define-judgment-form tt-typingL
+  #:mode (type-infer-normal I I I O)
+  #:contract (type-infer-normal Δ Γ e t)
+
+  [(type-infer Δ Γ e t)
+   ----------------- "DTR-Red"
+   (type-infer-normal Δ Γ e (reduce Δ t))])
 
 (define-judgment-form tt-typingL
   #:mode (type-check I I I I)
   #:contract (type-check Δ Γ e t)
 
   [(type-infer Δ Γ e t_0)
-   (convert Δ Γ t t_0)
+   (type-infer Δ Γ t U)
+   (subtype Δ Γ t t_0)
    ----------------- "DTR-Check"
    (type-check Δ Γ e t)])
+
